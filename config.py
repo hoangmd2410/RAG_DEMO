@@ -9,7 +9,9 @@ class Config:
     OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
     
     # Embedding Model Configuration
-    EMBEDDING_MODEL_NAME = "Qwen/Qwen3-Embedding-0.6B"  # Using Qwen3-Embedding-0.6B as requested
+    EMBEDDING_MODEL_NAME = "AITeamVN/Vietnamese_Embedding_v2"  # Using Qwen3-Embedding-0.6B as requested
+    CHUNKING_SYSTEM_PROMPT = './sys_prompts/chunking_system_prompt.md'
+    COMPARE_DOC_SYSTEM_PROMPT = './sys_prompts/compare_doc_prompt.md'
     
     # Nanonets OCR Configuration
     NANONETS_OCR_MODEL = "nanonets/Nanonets-OCR-s"
