@@ -1,13 +1,14 @@
 import gradio as gr
 import logging
 from rag.query_processor_comparator import QueryProcessorComparator
-from rag.indexing import DocumentIndexer
+from rag.indexing import DocumentIndexer, clean_text, validate_file
 from rag.querying import QueryProcessor
 from llm_processor import ApiProcessor, LLMProcessor
 from config import Config
 import os
 from datetime import datetime
 from typing import List, Dict
+import uuid
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -26,7 +27,6 @@ indexer = DocumentIndexer(api_processor, chunking_system_prompt)
 comparator = QueryProcessorComparator(
     user_prompt_file="./sys_prompts/compare_doc_prompt.md"
 )
-query_processor = comparator.query_processor
 
 def index_uploaded_document(file) -> str:
     """
@@ -43,10 +43,10 @@ def index_uploaded_document(file) -> str:
             return "❌ No file uploaded"
             
         file_path = file.name
-        if not file_path.endswith('.md'):
-            return "❌ File must be a Markdown (.md) file"
+        if not file_path.endswith('.pdf'):
+            return "❌ File must be a Markdown (.pdf) file"
             
-        result = indexer.index_md_doc(file_path)
+        result = indexer.index_document(file_path)
         
         if not result['success']:
             return f"❌ Indexing failed: {result['error']}"
@@ -59,6 +59,57 @@ def index_uploaded_document(file) -> str:
             f"- Total Characters: {result['total_characters']}\n"
             f"- Processing Time: {result['processing_time']:.2f} seconds"
         )
+    except Exception as e:
+        logger.error(f"Indexing error: {str(e)}")
+        return f"❌ Indexing error: {str(e)}"
+
+def extract_document(file):
+    try:
+        if not file:
+            return "❌ No file uploaded"
+            
+        file_path = file.name
+        if not file_path.endswith('.pdf'):
+            return "❌ File must be a pdf (.pdf) file"
+        filename = os.path.basename(file_path)
+        validation_result = validate_file(file_path)
+        document_metadata = {
+            'document_id': str(uuid.uuid4()),
+            'filename': filename,
+            'file_type': validation_result['extension'],
+            'file_size_mb': validation_result['size_mb'],
+            'timestamp': datetime.now().isoformat(),
+            'indexed_by': 'semantic_search_pipeline'
+        }
+        text = indexer.document_processor.extract_text(file_path)
+
+        text = clean_text(text)
+
+        chunks = indexer.chunk_text(text)
+
+        chunks_payloads = []
+
+        for i, chunk in enumerate(chunks):
+            # Get chunk text (handle both old and new formats)
+            chunk_text = chunk.get('text', chunk) if isinstance(chunk, dict) else str(chunk)
+            chunk_length = len(chunk_text)
+            payload = {
+                'document_id': document_metadata['document_id'],
+                'chunk_id': chunk.get('id', i) if isinstance(chunk, dict) else i,
+                'text': chunk['text'],
+                'chunk_length': chunk_length,
+                'chunk_start_pos': chunk.get('start_pos', 0) if isinstance(chunk, dict) else 0,
+                'chunk_end_pos': chunk.get('end_pos', chunk_length) if isinstance(chunk, dict) else chunk_length,
+                'document_name': document_metadata.get('filename', 'unknown'),
+                'document_type': document_metadata.get('file_type', 'unknown'),
+                'upload_timestamp': document_metadata.get('timestamp'),
+                'total_chunks': len(chunks),
+                'chunk_index': i
+            }
+            chunks_payloads.append(payload)
+        return chunks_payloads
+
+
     except Exception as e:
         logger.error(f"Indexing error: {str(e)}")
         return f"❌ Indexing error: {str(e)}"
@@ -76,7 +127,7 @@ def search_documents(query: str, max_results: int = 5, score_threshold: float = 
         Formatted string with search results
     """
     try:
-        result = query_processor.search(
+        result = comparator.query_processor.search(
             query=query,
             top_k=max_results,
             score_threshold=score_threshold
@@ -109,7 +160,8 @@ def search_documents(query: str, max_results: int = 5, score_threshold: float = 
         logger.error(f"Search error: {str(e)}")
         return f"❌ Search error: {str(e)}"
 
-def compare_documents(query: str, max_results: int = 5, score_threshold: float = 0.7) -> str:
+
+def compare_chunk(query: str, max_results: int = 5, score_threshold: float = 0.7) -> str:
     """
     Compare top-k search results for similarities and conflicts using QueryProcessorComparator.
     
@@ -121,18 +173,33 @@ def compare_documents(query: str, max_results: int = 5, score_threshold: float =
     Returns:
         Formatted string with comparison results
     """
-    # try:
-    result = comparator.compare_query_results(
-        query=query,
-        top_k=max_results,
-        score_threshold=score_threshold
-    )
-    
-    return result
+    try:
+        result = comparator.compare_query_results(
+            query=query,
+            top_k=max_results,
+            score_threshold=score_threshold
+        )
         
-    # except Exception as e:
-    #     logger.error(f"Comparison error: {str(e)}")
-    #     return f"❌ Comparison error: {str(e)}"
+        return result
+        
+    except Exception as e:
+        logger.error(f"Comparison error: {str(e)}")
+        return f"❌ Comparison error: {str(e)}"
+def compare_document(file):
+
+    chunks_payloads = extract_document(file)
+
+    results = []
+
+    for chunk in chunks_payloads:
+
+        result = compare_chunk(chunk)
+
+        results.append({
+            "input query": chunk,
+            "compared result": result
+        })
+    return results
 
 def generate(prompt, history):
     # Generate the answer using the QuestionAnswering class with history
@@ -184,7 +251,28 @@ def create_interface():
                 inputs=[file_input],
                 outputs=index_output
             )
-        
+        with gr.Tab("📂 Compare Document"):
+            gr.Markdown("### Upload PDF Document")
+            gr.Markdown("*Upload a .pdf file to index its contents for search and comparison.*")
+            
+            file_input = gr.File(
+                label="Upload pdf File",
+                file_types=[".pdf"]
+            )
+            
+            index_btn = gr.Button("📂 Check Document", variant="primary")
+            
+            index_output = gr.Textbox(
+                label="Indexing Results",
+                lines=20,
+                interactive=False
+            )
+            
+            index_btn.click(
+                fn=compare_document,
+                inputs=[file_input],
+                outputs=index_output
+            )        
         with gr.Tab("🔍 Search Documents"):
             gr.Markdown("### Search Documents")
             gr.Markdown("*Enter a query to search for relevant documents in the indexed database.*")
@@ -225,8 +313,8 @@ def create_interface():
                 outputs=search_output
             )
         
-        with gr.Tab("📊 Compare Documents"):
-            gr.Markdown("### Compare Documents for Conflicts and Similarities")
+        with gr.Tab("📊 Compare chunk query"):
+            gr.Markdown("### Compare chunk for Conflicts and Similarities")
             gr.Markdown("*Enter a query to search for documents and compare their clauses for conflicts or similarities.*")
             
             query_input = gr.Textbox(
@@ -260,7 +348,7 @@ def create_interface():
             )
             
             compare_btn.click(
-                fn=compare_documents,
+                fn=compare_chunk,
                 inputs=[query_input, max_results, score_threshold],
                 outputs=compare_output
             )
