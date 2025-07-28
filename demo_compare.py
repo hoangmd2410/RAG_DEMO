@@ -189,16 +189,19 @@ def compare_document(file):
 
     chunks_payloads = extract_document(file)
 
-    results = []
+    results = ""
 
     for chunk in chunks_payloads:
 
-        result = compare_chunk(chunk)
+        result = compare_chunk(str(chunk))
 
-        results.append({
-            "input query": chunk,
-            "compared result": result
-        })
+        if not isinstance(result, dict):
+
+            chunk = str(chunk).replace('```json','')
+            result = f"# input query \n ```{chunk}```\n #compared result \n {result} \n ==================\n"
+
+            results += result
+    print(results)
     return results
 
 def generate(prompt, history):
@@ -265,14 +268,29 @@ def create_interface():
             index_output = gr.Textbox(
                 label="Indexing Results",
                 lines=20,
-                interactive=False
-            )
+                interactive=False)
+            # with gr.Accordion("Indexing Results", open=True):
+            #     index_output = gr.Markdown(
+            #         value="Upload a PDF and click 'Check Document' to see results.",
+            #         show_label=False
+            #     )
+            
+            def run_with_progress(file):
+                # yield "⏳ Processing... please wait..."
+                # Then return actual results
+                return compare_document(file)
+
             
             index_btn.click(
-                fn=compare_document,
-                inputs=[file_input],
+                fn=run_with_progress,
+                inputs=file_input,
                 outputs=index_output
-            )        
+            )
+            # .then(
+            #     fn=compare_document,
+            #     inputs=file_input,
+            #     outputs=index_output
+            # )  
         with gr.Tab("🔍 Search Documents"):
             gr.Markdown("### Search Documents")
             gr.Markdown("*Enter a query to search for relevant documents in the indexed database.*")
