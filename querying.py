@@ -8,10 +8,14 @@ from qdrant_setup import QdrantManager
 from config import Config
 import asyncio
 import json
+from sklearn.metrics.pairwise import cosine_similarity
+import tiktoken
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 from indexing import clean_text
+
+
 class QueryProcessor:
     """Handles query processing and retrieval from the vector database."""
     
@@ -26,7 +30,7 @@ class QueryProcessor:
             logger.warning("⚠️ OpenAI API key not found. Some features may not work.")
     
     def search(self, query: str, top_k: Optional[int] = None, score_threshold: Optional[float] = None, 
-               document_filter: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+               document_filter: Optional[Dict[str, Any]] = None, get_entire_text: bool = False) -> Dict[str, Any]:
         """
         Perform semantic search for the given query.
         
@@ -71,7 +75,8 @@ class QueryProcessor:
                 query_embedding=query_embedding,
                 top_k=top_k or Config.TOP_K_RESULTS,
                 score_threshold=score_threshold or Config.SIMILARITY_THRESHOLD,
-                document_filter=document_filter or {}
+                document_filter=document_filter or {},
+                get_entire_text=get_entire_text
             )
             
             # Step 3: Format and enhance results
@@ -81,6 +86,7 @@ class QueryProcessor:
                     'id': result['id'],
                     'score': round(result['score'], 4),
                     'text': result['text'],
+                    'entire_text': result['entire_text'] if get_entire_text else None,
                     'document_name': result['document_name'],
                     'document_type': result['document_type'],
                     'document_id': result['document_id'],
@@ -172,7 +178,7 @@ class QueryProcessor:
         
         return results
     
-    def get_context_for_query(self, query: str, max_context_length: int = 20000) -> str:
+    def get_context_for_query(self, query: str, max_context_length: int = 50000) -> str:
         """
         Get relevant context chunks for a query to use with LLM.
         
@@ -183,17 +189,37 @@ class QueryProcessor:
         Returns:
             Concatenated context string
         """
-        search_results = self.search(query, top_k=5)
+        search_results = self.search(query, top_k=Config.TOP_K_RESULTS, get_entire_text=True)
         
         if not search_results['success'] or not search_results['results']:
             return ""
         
         context_parts = []
         current_length = 0
+        # Track unique documents by name and their best score
+        unique_documents = {}
         
+        # First pass: find top 5 unique documents by score
         for result in search_results['results']:
-            text = result['text']
-            text_length = len(text)
+            document_name = result['document_name']
+            score = result['score']
+            
+            if document_name not in unique_documents or score > unique_documents[document_name]['score']:
+                unique_documents[document_name] = {
+                    'score': score,
+                    'entire_text': result['entire_text']
+                }
+        for doc_name, doc_info in unique_documents.items():
+            logger.info(f"DOCUMENT {doc_name}: {doc_info['score']}")
+        # Sort by score and take top 5
+        top_documents = sorted(unique_documents.items(), key=lambda x: x[1]['score'], reverse=True)[:3]
+        
+        encoding = tiktoken.encoding_for_model("gpt-4")
+        # Add content from top documents
+        for i, (doc_name, doc_info) in enumerate(top_documents):
+            text = doc_info['entire_text']
+            text_length = len(encoding.encode(text))
+            logger.info(f"🔍 {doc_name} Text length: {text_length}")
             
             # Check if adding this text would exceed max length
             if current_length + text_length > max_context_length:
@@ -201,13 +227,14 @@ class QueryProcessor:
                 remaining_length = max_context_length - current_length
                 if remaining_length > 100:  # Only add if substantial text can fit
                     text = text[:remaining_length] + "..."
-                    context_parts.append(f"[{result['document_name']}] {text}")
+                    context_parts.append(f"DOCUMENT {i+1}: [{doc_name}] \n {text}")
                 break
             
-            context_parts.append(f"[{result['document_name']}] {text}")
+            context_parts.append(f"DOCUMENT {i+1}: {doc_name} \n {text}")
             current_length += text_length
+        logger.info(f"🔍 Context length: {current_length}")
         
-        return "\n\n".join(context_parts)
+        return "\n--------------------------------------------\n".join(context_parts), top_documents
     
     def answer_question_with_context(self, question: str, use_openai: bool = True) -> Dict[str, Any]:
         """
@@ -231,26 +258,21 @@ class QueryProcessor:
         }
         
         try:
-            # Get relevant context
-            context = self.get_context_for_query(question)
-            
+            # Get relevant context  
+            context, top_documents = self.get_context_for_query(question)
             if not context:
                 result['error'] = "No relevant context found for the question"
                 return result
             
             result['context_used'] = context
-            
-            # Extract source documents
-            search_results = self.search(question, top_k=3)
-            if search_results['success']:
-                result['source_documents'] = [
-                    {
-                        'name': r['document_name'],
-                        'score': r['score'],
-                        'chunk_info': r['chunk_info']
-                    }
-                    for r in search_results['results']
-                ]
+            # add source documents to result
+            result['source_documents'] = [
+                {
+                    'name': document_name,
+                    'score': document_info['score']
+                }
+                for document_name, document_info in top_documents
+            ]
             
             if use_openai and Config.OPENAI_API_KEY:
                 # Use OpenAI to generate answer
@@ -265,9 +287,9 @@ class QueryProcessor:
                 try:
                     async def get_response(prompt):
                         client = AsyncOpenAI(api_key=Config.OPENAI_API_KEY)
-                        logger.info(f"🔍 Prompt: {prompt}")
+                        # logger.info(f"🔍 Prompt: {prompt}")
                         response = await client.chat.completions.create(
-                            model="gpt-4o-mini",
+                            model="gpt-4.1-mini",
                             messages=[
                                     {"role": "system", "content": "Bạn là một trợ lý hữu ích giúp trả lời câu hỏi dựa trên context được cung cấp. Hãy trả lời chính xác và ghi nhận nguồn tài liệu khi cần thiết."},
                                     {"role": "user", "content": prompt}
@@ -411,74 +433,70 @@ class QueryProcessor:
         
         return quote_result
     
-    def get_similar_documents(self, document_id: str, top_k: int = 5) -> List[Dict[str, Any]]:
+    def get_similar_documents(self, query_text: str = None, document_id: str = None, chunk_ids: List[str] = None) -> List[Dict[str, Any]]:
         """
-        Find documents similar to a given document.
+        Find documents similar to a given query text, document, or specific chunks.
         
         Args:
+            query_text: Text query to find similar documents
             document_id: ID of the reference document
-            top_k: Number of similar documents to return
+            chunk_ids: List of specific chunk IDs to compare against
             
         Returns:
             List of similar documents
         """
-        try:
-            # First, get some chunks from the reference document
-            ref_chunks = self.qdrant_manager.search_similar(
-                query_embedding=[0] * Config.VECTOR_SIZE,  # Dummy embedding
-                top_k=3,
-                document_filter={'document_id': document_id}
-            )
-            
-            if not ref_chunks:
-                return []
-            
-            # Use the first chunk to find similar documents
-            ref_embedding = ref_chunks[0]['vector'] if 'vector' in ref_chunks[0] else None
-            
-            if not ref_embedding:
-                return []
-            
-            # Search for similar chunks from other documents
-            similar_chunks = self.qdrant_manager.search_similar(
-                query_embedding=ref_embedding,
-                top_k=top_k * 3  # Get more to filter out same document
-            )
-            
-            # Group by document and exclude the reference document
-            document_scores = {}
-            for chunk in similar_chunks:
-                if chunk['document_id'] == document_id:
-                    continue  # Skip same document
-                
-                doc_id = chunk['document_id']
-                if doc_id not in document_scores:
-                    document_scores[doc_id] = {
-                        'document_id': doc_id,
-                        'document_name': chunk['document_name'],
-                        'document_type': chunk['document_type'],
-                        'max_score': chunk['score'],
-                        'avg_score': chunk['score'],
-                        'chunk_count': 1
-                    }
-                else:
-                    doc_info = document_scores[doc_id]
-                    doc_info['max_score'] = max(doc_info['max_score'], chunk['score'])
-                    doc_info['avg_score'] = (doc_info['avg_score'] * doc_info['chunk_count'] + chunk['score']) / (doc_info['chunk_count'] + 1)
-                    doc_info['chunk_count'] += 1
-            
-            # Sort by average score and return top_k
-            similar_docs = sorted(
-                document_scores.values(),
-                key=lambda x: x['avg_score'],
-                reverse=True
-            )[:top_k]
-            
-            return similar_docs
-            
-        except Exception as e:
-            logger.error(f"❌ Error finding similar documents: {e}")
+        if not query_text and not document_id and not chunk_ids:
+            logger.error("❌ Either query_text, document_id, or chunk_ids must be provided")
             return []
+        if isinstance(chunk_ids, str):
+            chunk_ids = [chunk_ids]
+
+        # try:
+        ref_embedding = None
+        
+        ref_embedding = self.embedding_manager.get_query_embedding(query_text)
+        if not ref_embedding:
+            logger.error("❌ Failed to generate embedding for query text")
+            return []
+
+        if document_id:
+            list_chunk = self.qdrant_manager.get_chunks_by_document_id(document_id)
+            if not list_chunk:
+                logger.error(f"❌ No chunks found for document ID: {document_id}")
+                return []
+            chunk_embeddings = [chunk['vector'] for chunk in list_chunk if 'vector' in chunk]
+            if not chunk_embeddings:
+                logger.error(f"❌ No embeddings found for document ID: {document_id}")
+                return []
+            
+        if chunk_ids:
+            list_chunk = self.qdrant_manager.get_chunks_by_chunk_ids(chunk_ids)
+            if not list_chunk:
+                logger.error(f"❌ No chunks found for chunk IDs: {chunk_ids}")
+                return []
+            chunk_embeddings = [chunk['vector'] for chunk in list_chunk if 'vector' in chunk]
+            if not chunk_embeddings:
+                logger.error(f"❌ No embeddings found for chunk IDs: {chunk_ids}")
+                return []
+            ref_embedding = [sum(values) / len(values) for values in zip(*chunk_embeddings)]
+            
+            if not chunk_embeddings:
+                logger.error("❌ No embeddings found for provided chunk IDs")
+                return []
+            
+        #calculate similarity between ref_embedding and chunk_embeddings
+        similarity_scores = [cosine_similarity(ref_embedding, chunk['vector'])[0][0] for chunk in chunk_embeddings]
+        #sort by similarity score
+        list_chunk_with_sims = []
+        for chunk, sim in zip(chunk_embeddings, similarity_scores):
+            chunk['similarity_score'] = sim
+            list_chunk_with_sims.append(chunk)
+        #sort by similarity score
+        list_chunk_with_sims.sort(key=lambda x: x['similarity_score'], reverse=True)
+        return list_chunk_with_sims
+        # except Exception as e:
+        #     logger.error(f"❌ Error finding similar documents: {e}")
+        #     return []
 
 
 

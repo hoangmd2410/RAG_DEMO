@@ -22,7 +22,7 @@ class DocumentIndexer:
         self.qdrant_manager = QdrantManager()
         self.document_processor = DocumentProcessor()
         self.text_splitter = MarkdownTextSplitter(
-            chunk_size=3000,
+            chunk_size=2000,
             chunk_overlap=200,
         )
     
@@ -119,7 +119,8 @@ class DocumentIndexer:
             storage_success = self.qdrant_manager.add_documents(
                 chunks=chunks,
                 embeddings=embeddings,
-                document_metadata=document_metadata
+                document_metadata=document_metadata,
+                entire_text=text
             )
             
             if not storage_success:

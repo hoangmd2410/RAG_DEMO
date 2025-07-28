@@ -3,13 +3,14 @@ import os
 from datetime import datetime
 from typing import List, Tuple, Any
 import logging
-
+import asyncio
+from openai import AsyncOpenAI
 # Import our modules
 from config import Config, validate_config
 from indexing import DocumentIndexer, verify_indexing_setup
 from querying import QueryProcessor
 from qdrant_setup import check_qdrant_connection
-
+from utils import crop_all_pages, encode_image
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -122,13 +123,13 @@ class SemanticSearchApp:
             
             response = (f"💡 **Question:** {result['question']}\n"
                         f"🤖 **Answer:** {result['answer']}\n"
-                        f"📚 **Source Documents:**")
+                        f"📚 **Source Documents:\n")
             
             for doc in result['source_documents']:
                 response += f"- {doc['name']} (Score: {doc['score']:.3f})\n"
             
-            if result['context_used']:
-                response += f"\n📖 **Context Used:**\n{result['context_used']}"
+            # if result['context_used']:
+            #     response += f"\n📖 **Context Used:**\n{result['context_used']}"
             
             return response
             
@@ -188,53 +189,222 @@ class SemanticSearchApp:
         except Exception as e:
             return f"❌ Error listing documents: {str(e)}"
     
-    def extract_information(self, json_format: str, document_text: str) -> str:
-        """Extract structured information from document text using LLM."""
-        if not json_format.strip() or not document_text.strip():
-            return "❌ Please provide both JSON format and document text"
+    def extract_information(self, file) -> str:
+        """Extract structured information from uploaded document using LLM."""
+        if file is None:
+            return "❌ Please upload a document file"
         
         if not self.query_processor:
             return "❌ System not ready. Please check configuration."
         
+        from openai import AsyncOpenAI
+        import asyncio
+        from config import Config
+        import tempfile
+        import base64
+        
+        if not Config.OPENAI_API_KEY:
+            return "❌ OpenAI API key not configured. Information extraction requires OpenAI."
+        
+              
         try:
-            from openai import AsyncOpenAI
-            import asyncio
-            from config import Config
+            # Get file path
+            file_path = file.name if hasattr(file, 'name') else str(file)      
+            encoded_images = crop_all_pages(file_path)
             
-            if not Config.OPENAI_API_KEY:
-                return "❌ OpenAI API key not configured. Information extraction requires OpenAI."
+            # Prepare messages with images for OpenAI Vision
+            content = []
             
-            # Construct the extraction prompt
-            prompt = (f"Given the following document text, extract the specified entities according to the JSON format provided. "
-                     f"Respond only with valid JSON format.\n\n"
-                     f"**Desired JSON Format:**\n{json_format}\n\n"
-                     f"**Document Text:**\n\"\"\"\n{document_text}\n\"\"\"\n\n"
-                     f"Extract the information and return it in the exact JSON format specified above. "
-                     f"If any field cannot be determined from the text, use null for that field.")
+            # Add each page as an image
+            for _, encoded_image in enumerate(encoded_images):
+                content.append({
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:image/png;base64,{encoded_image}"
+                    }
+                })
             
-            # Use OpenAI to extract information
-            async def extract_information_async(prompt):
+            # Use OpenAI Vision API for PDF images
+            async def extract_from_images():
                 client = AsyncOpenAI(api_key=Config.OPENAI_API_KEY)
                 response = await client.chat.completions.create(
-                    model="gpt-4o-mini",
+                    model="gpt-4o",  # Use gpt-4o for vision capabilities
                     response_format={"type": "json_object"},
                     messages=[
-                        {"role": "system", "content": "You are a helpful assistant that extracts information from documents and returns structured JSON data according to the specified format."},
-                        {"role": "user", "content": prompt}
+                        {
+                            "role": "system", 
+                            "content": """Dựa vào nội dung của file pdf được upload, trích xuất các thông tin quan trọng và trả về dưới dạng json:
+                            - Thể loại (type): Thể loại của văn bản được upload. Nó có thể là Quyết định, Nghị định, Nghị quyết, Thông tư. Thông tin này được quyết định dựa vào phần đầu nội dung của văn bản sau khi kết thúc phần quốc hiệu tiêu ngữ. Thường được in đậm cùng với tên văn bản
+                            - Tên văn bản (Document Name): Tên văn bản được upload, nằm ở phần đầu văn bản ngay sau phần Thể loại. Thường được in đậm cùng với "Thể loại". Phải lấy hết toàn bộ nôi dung nguyên văn của tên văn bản, không được tóm tắt
+                            - Cơ quan ban hành (Source): Cơ quan hoặc tổ chức ban hành văn bản, nằm ở phần đầu văn bản
+                            - Văn bản căn cứ (Related Documents): Danh sách các văn bản cản cứ mà văn bản hiện tại dựa vào để ban hành. Chúng được nằm ở phần đầu nội dung văn bản sau khi kết thúc phần tên văn bản. Đây là các đoạn văn được bắt đầu bằng motip "Căn cứ". Ví dụ 'Căn cứ Luật giao thông 2025' hoặc 'Căn cứ Thông tư 64 năm 2024"
+                            - Ngày tháng năm phát hành (Date of Issue): Ngày tháng năm phát hành của văn bản, nằm ở phần đầu văn bản.
+                            - Người kí (Signature Name): Nằm ở phần cuối của văn bản phần chữ kí
+                            - Chức vụ người kí (Position): Nằm ở phần cuối văn bản cùng với phần chữ kí
+                            Kết quả trả về dưới dạng json theo format như sau:
+                            {
+                            'result': {
+                                "type": "Thể loại của văn bản",
+                                "Document Name": "Tên văn bản được upload",
+                                "Source": "Cơ quan hoặc tổ chức ban hành văn bản",
+                                "Related Documents": List các văn bản cản cứ mà văn bản hiện tại dựa vào để ban hành",
+                                "Date of Issue": "Ngày tháng năm phát hành của văn bản. Trả về dưới dạng dd/mm/yyyy. Nếu ngày tháng năm phần nào không có thì trả về --. Ví dụ 22/06/2025 hoặc --/06/2025 nếu không có phần ngày",
+                                "Signature Name": "Người kí của văn bản",
+                                "Position": "Chức vụ người kí của văn bản. None nếu không có"
+                                }
+                            }
+                            Ví dụ:
+                            {
+                                "result": {
+                                    "type": "Thông tư",
+                                    "Document Name": "Hướng dẫn thực hiện bảo đảm cấp nước an toàn khu vực nông thôn",
+                                    "Source": "Văn phòng chính phủ",
+                                    "Related Documents": ["Nghị định số 105/2022/NĐ-CP", "Nghị định số 117/2007/NĐ-CP", " Nghị định số 124/2011/NĐ-CP"],
+                                    "Date of Issue": "22/07/2025",
+                                    "Signature Name": "Phạm Minh Chính",
+                                    "Position": "Thủ tướng"
+                                }
+                            }
+                            """
+                        },
+                        {
+                            "role": "user",
+                            "content": content
+                        }
                     ]
                 )
-                content = response.choices[0].message.content
-                return content.strip() if content else "{}"
+                return response.choices[0].message.content
             
-            # Get the response
-            extracted_data = asyncio.run(extract_information_async(prompt))
+            extracted_data = asyncio.run(extract_from_images())
             
             return (f"✅ **Information Extraction Completed**\n\n"
-                   f"**Extracted Data:**\n```json\n{extracted_data}\n```\n\n"
-                   f"The information has been successfully extracted from the document.")
-                
+                    f"**Extracted Data:**\n{extracted_data}\n")
+            
+        except ImportError as e:
+            return f"❌ {str(e)}"
         except Exception as e:
-            return f"❌ **Error during extraction:** {str(e)}"
+            return f"❌ Error processing PDF file: {str(e)}"
+    
+    def ocr_pdf_document(self, file):
+        """OCR PDF document using GPT-4o vision model."""
+        if file is None:
+            return "❌ Please upload a PDF file", ""
+        
+        try:           
+            if not Config.OPENAI_API_KEY:
+                return "❌ OpenAI API key not configured", ""
+            
+            # Get file path
+            file_path = file.name if hasattr(file, 'name') else str(file)
+            file_extension = os.path.splitext(file_path)[1].lower()
+            filename = os.path.basename(file_path)
+            
+            if file_extension != '.pdf':
+                return "❌ Please upload a PDF file only", ""
+            
+            
+            # Convert PDF to images
+            encoded_images = crop_all_pages(file_path)
+            
+            # Prepare content for OCR
+            content = [
+            ]
+            
+            # Add each page as an image
+            for encoded_image in encoded_images:
+                content.append({
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:image/png;base64,{encoded_image}"
+                    }
+                })
+            
+            # Use OpenAI Vision API for OCR
+            async def perform_ocr():
+                client = AsyncOpenAI(api_key=Config.OPENAI_API_KEY)
+                response = await client.chat.completions.create(
+                    model="gpt-4.1",
+                    messages=[
+                        {
+                            "role": "system", 
+                            "content": "convert these images from a pdf file into markdown string. The output is only string with markdown format, nothing more. Remember to keep all contents of all images. You must format output as it shows in these images so the markdown is readable and beautiful."
+                        },
+                        {
+                            "role": "user",
+                            "content": content
+                        }
+                    ]
+                )
+                return response.choices[0].message.content
+            
+            # Get OCR text
+            ocr_text = asyncio.run(perform_ocr())
+            
+            status_message = (f"✅ **PDF OCR Completed**\n\n"
+                             f"📄 **File:** {filename}\n"
+                             f"📊 **Pages Processed:** {len(encoded_images)}\n"
+                             f"📝 **Text Length:** {len(ocr_text):,} characters\n\n"
+                             f"You can now chat about this document!")
+            
+            return status_message, ocr_text
+            
+        except Exception as e:
+            return f"❌ **Error during OCR:** {str(e)}", ""
+    
+    def chat_with_document(self, message, chat_history, ocr_text):
+        """Chat about the uploaded document using OCR text as context."""
+        if not message.strip():
+            return ["Please upload a PDF document first.", ""], ""
+        if not ocr_text:
+            return ["Please upload a PDF document first.", ""], ""
+        
+        try:
+            if not Config.OPENAI_API_KEY:
+                return [message, "❌ OpenAI API key not configured"], ""
+            
+            # Prepare conversation context
+            conversation_history = ""
+            for user_msg, bot_msg in chat_history:
+                if user_msg and bot_msg:
+                    conversation_history += f"User: {user_msg}\nAssistant: {bot_msg}\n\n"
+            
+            # Create system prompt with document context
+            system_prompt = (
+                           f"Dựa vào nội dung của văn bản được cung cấp và lịch sử hội thoại, trả lời câu hỏi của người dùng:\n\n"
+                           f"Đây là nội dung văn bnả:\n{ocr_text}\n\n"
+                           f"Lịch sử hội thoại:\n{conversation_history}\n"
+                           f"Trả lời câu hỏi bằng tiếng Việt. "
+                           f"Nếu không có thông tin trong văn bản, hãy nói rằng không có thông tin trong văn bản và giải thích "
+                           f"Trả lời chính xác và rõ ràng.")
+            
+            async def get_chat_response():
+                client = AsyncOpenAI(api_key=Config.OPENAI_API_KEY)
+                response = await client.chat.completions.create(
+                    model="gpt-4.1-mini",
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": message}
+                    ]
+                )
+                return response.choices[0].message.content
+            
+            # Get response
+            bot_response = asyncio.run(get_chat_response())
+            
+            # Add to chat history
+            chat_history.append([message, bot_response])
+            
+            return chat_history, ""
+            
+        except Exception as e:
+            error_msg = f"❌ Error: {str(e)}"
+            chat_history.append([message, error_msg])
+            return chat_history, ""
+    
+    def reset_chat(self):
+        """Reset chat history and file upload."""
+        return [], None, "", ""
+
 
 def create_interface():
     """Create the Gradio interface."""
@@ -254,6 +424,8 @@ def create_interface():
         - 📄 Document upload (PDF, DOCX, TXT)
         - 🧠 Semantic search with AI embeddings
         - 💬 Question answering with OpenAI
+        - 🔍 Information extraction from documents
+        - 💬 Chat with PDF documents using OCR
         - 📊 System monitoring
         """)
         
@@ -354,30 +526,12 @@ def create_interface():
             # Information Extraction Tab (Pipeline 2)
             with gr.Tab("🔍 Extract Information"):
                 gr.Markdown("### Automated Information Extraction (Pipeline 2)")
-                gr.Markdown("*Extract structured data from document text using AI. Define your desired JSON format and paste document text.*")
+                gr.Markdown("*Upload a document and provide custom extraction instructions to extract specific information using AI.*")
                 
-                with gr.Row():
-                    with gr.Column(scale=1):
-                        json_format_input = gr.Textbox(
-                            label="Desired JSON Format",
-                            placeholder='''Example:
-{
-  "signer_name": "Full name of document signer",
-  "issue_date": "Date in YYYY-MM-DD format", 
-  "document_class": "Type of document",
-  "key_points": ["List of main points"]
-}''',
-                            lines=8,
-                            max_lines=15
-                        )
-                    
-                    with gr.Column(scale=2):
-                        document_text_input = gr.Textbox(
-                            label="Document Text",
-                            placeholder="Paste your document text here...",
-                            lines=8,
-                            max_lines=15
-                        )
+                extraction_file_input = gr.File(
+                    label="Select Document (PDF, DOCX, TXT)",
+                    file_count="single"
+                )
                 
                 extract_btn = gr.Button("🔍 Extract Information", variant="primary")
                 
@@ -389,8 +543,77 @@ def create_interface():
                 
                 extract_btn.click(
                     fn=app.extract_information,
-                    inputs=[json_format_input, document_text_input],
+                    inputs=[extraction_file_input],
                     outputs=extraction_output
+                )
+            
+            # Document Chat Tab
+            with gr.Tab("💬 Chat with Document"):
+                gr.Markdown("### Chat with Your PDF Document")
+                gr.Markdown("*Upload a PDF document, get it OCR'd by GPT-4o, and chat about its content.*")
+                
+                with gr.Row():
+                    with gr.Column(scale=1):
+                        chat_file_input = gr.File(
+                            label="Upload PDF Document",
+                            file_count="single",
+                            file_types=[".pdf"]
+                        )
+                        
+                        ocr_btn = gr.Button("📖 Processing Document...", variant="primary")
+                        refresh_btn = gr.Button("🔄 Reset Chat", variant="secondary")
+                        
+                        ocr_status = gr.Textbox(
+                            label="Processing Text...",
+                            lines=8,
+                            interactive=False
+                        )
+                    
+                    with gr.Column(scale=2):
+                        chatbot = gr.Chatbot(
+                            label="Chat History",
+                            height=500
+                        )
+                        
+                        chat_input = gr.Textbox(
+                            label="Your Message",
+                            placeholder="Ask a question about the uploaded document...",
+                            lines=2
+                        )
+                        
+                        send_btn = gr.Button("📤 Send", variant="primary")
+                
+                # Hidden state to store OCR text
+                ocr_text_state = gr.State("")
+                
+                # OCR button functionality
+                ocr_btn.click(
+                    fn=app.ocr_pdf_document,
+                    inputs=[chat_file_input],
+                    outputs=[ocr_status, ocr_text_state]
+                )
+                
+                # Chat functionality
+                def submit_message(message, history, ocr_text):
+                    new_history, _ = app.chat_with_document(message, history, ocr_text)
+                    return new_history, ""
+                
+                send_btn.click(
+                    fn=submit_message,
+                    inputs=[chat_input, chatbot, ocr_text_state],
+                    outputs=[chatbot, chat_input]
+                )
+                
+                chat_input.submit(
+                    fn=submit_message,
+                    inputs=[chat_input, chatbot, ocr_text_state],
+                    outputs=[chatbot, chat_input]
+                )
+                
+                # Reset functionality
+                refresh_btn.click(
+                    fn=app.reset_chat,
+                    outputs=[chatbot, chat_file_input, ocr_status, ocr_text_state]
                 )
             
             # Management Tab

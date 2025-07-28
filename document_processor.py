@@ -149,7 +149,7 @@ class DocumentProcessor:
             return self.extract_text_from_pdf(file_path)
         elif file_ext == '.docx':
             return self.extract_text_from_docx(file_path)
-        elif file_ext == '.txt':
+        elif file_ext == '.txt' or file_ext == '.md':
             return self.extract_text_from_txt(file_path)
         elif file_ext in ['.png', '.jpg', '.jpeg', '.tiff', '.tif', '.bmp', '.webp']:
             return self.extract_text_from_image(file_path)

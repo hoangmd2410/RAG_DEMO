@@ -105,7 +105,8 @@ class EmbeddingManager:
     
     def get_query_embedding(self, query: str) -> List[float]:
         """Generate embedding for a search query with instruction."""
-        instruction = "Given a web search query, retrieve relevant passages that answer the query"
+        # instruction = "Given a web search query, retrieve relevant passages that answer the query"
+        instruction = ""
         embeddings = self.get_embeddings([query], instruction=instruction)
         return embeddings[0] if embeddings else []
 
