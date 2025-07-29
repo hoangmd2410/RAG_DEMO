@@ -12,12 +12,14 @@ import json
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 from rag.indexing import clean_text
+from rag.reranker import Reranker
 class QueryProcessor:
     """Handles query processing and retrieval from the vector database."""
     
     def __init__(self):
         self.embedding_manager = EmbeddingManager()
         self.qdrant_manager = QdrantManager()
+        self.reranker = Reranker()
         
         # Initialize OpenAI client
         if Config.OPENAI_API_KEY:
@@ -411,7 +413,8 @@ class QueryProcessor:
         
         return quote_result
     
-    def get_similar_documents(self, document_id: str, top_k: int = 5) -> List[Dict[str, Any]]:
+    def get_similar_documents(self, query: str, retrieval_top_k: int = 40,rerank_top_k: int = 10, score_threshold: Optional[float] = None, 
+               document_filter: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
         """
         Find documents similar to a given document.
         
@@ -423,63 +426,47 @@ class QueryProcessor:
             List of similar documents
         """
         try:
-            # First, get some chunks from the reference document
-            ref_chunks = self.qdrant_manager.search_similar(
-                query_embedding=[0] * Config.VECTOR_SIZE,  # Dummy embedding
-                top_k=3,
-                document_filter={'document_id': document_id}
+            # Clean and prepare query
+            cleaned_query = clean_text(query)
+            logger.info(f"🔍 Processing search query: {cleaned_query}")
+            
+            # Step 1: Generate query embedding
+            query_embedding = self.embedding_manager.get_query_embedding(cleaned_query)
+            
+            # Step 2: Search in Qdrant
+            search_results = self.qdrant_manager.search_similar(
+                query_embedding=query_embedding,
+                top_k=retrieval_top_k or Config.TOP_K_RESULTS,
+                score_threshold=score_threshold or Config.SIMILARITY_THRESHOLD,
+                document_filter=document_filter or {}
             )
-            
-            if not ref_chunks:
-                return []
-            
-            # Use the first chunk to find similar documents
-            ref_embedding = ref_chunks[0]['vector'] if 'vector' in ref_chunks[0] else None
-            
-            if not ref_embedding:
-                return []
-            
-            # Search for similar chunks from other documents
-            similar_chunks = self.qdrant_manager.search_similar(
-                query_embedding=ref_embedding,
-                top_k=top_k * 3  # Get more to filter out same document
-            )
-            
-            # Group by document and exclude the reference document
-            document_scores = {}
-            for chunk in similar_chunks:
-                if chunk['document_id'] == document_id:
-                    continue  # Skip same document
-                
-                doc_id = chunk['document_id']
-                if doc_id not in document_scores:
-                    document_scores[doc_id] = {
-                        'document_id': doc_id,
-                        'document_name': chunk['document_name'],
-                        'document_type': chunk['document_type'],
-                        'max_score': chunk['score'],
-                        'avg_score': chunk['score'],
-                        'chunk_count': 1
-                    }
-                else:
-                    doc_info = document_scores[doc_id]
-                    doc_info['max_score'] = max(doc_info['max_score'], chunk['score'])
-                    doc_info['avg_score'] = (doc_info['avg_score'] * doc_info['chunk_count'] + chunk['score']) / (doc_info['chunk_count'] + 1)
-                    doc_info['chunk_count'] += 1
-            
-            # Sort by average score and return top_k
-            similar_docs = sorted(
-                document_scores.values(),
-                key=lambda x: x['avg_score'],
-                reverse=True
-            )[:top_k]
-            
-            return similar_docs
+            # convert search_results to list of dict, each dict has document_id, text, score
+            similar_docs = []
+            for result in search_results:
+                similar_docs.append({
+                    'id': result['id'],
+                    'document_id': result['document_id'],
+                    'document_name': result['document_name'],
+                    'text': result['text'],
+                    'score': result['score']
+                })
+            reranked_docs = self.reranker.rerank_documents(query, similar_docs)
+            reranked_dict = dict()
+            for doc in reranked_docs:
+                if doc['document_name'] not in reranked_dict:
+                    reranked_dict[doc['document_name']] = [doc['rerank_score'], doc['score']]
+                if len(reranked_dict) >= rerank_top_k:
+                    break
+            reranked_list_docs = sorted(reranked_dict.items(), key=lambda x: x[1][0], reverse=True)
+            logger.info(f"✅ Reranked documents {reranked_list_docs}")
+
+            reranked_docs = [doc[0] for doc in reranked_list_docs]
+            # reranked_docs = reranked_docs[:rerank_top_k]   
+            return reranked_docs
             
         except Exception as e:
             logger.error(f"❌ Error finding similar documents: {e}")
             return []
-
 
 
 def get_query_suggestions(partial_query: str, max_suggestions: int = 5) -> List[str]:

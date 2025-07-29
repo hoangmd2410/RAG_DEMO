@@ -10,6 +10,7 @@ class Config:
     
     # Embedding Model Configuration
     EMBEDDING_MODEL_NAME = "AITeamVN/Vietnamese_Embedding_v2"  # Using Qwen3-Embedding-0.6B as requested
+    RERANKER_MODEL_NAME = "AITeamVN/Vietnamese_Reranker"
     CHUNKING_SYSTEM_PROMPT = './sys_prompts/chunking_system_prompt.md'
     COMPARE_DOC_SYSTEM_PROMPT = './sys_prompts/compare_doc_prompt.md'
     

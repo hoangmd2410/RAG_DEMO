@@ -44,7 +44,7 @@ class EmbeddingManager:
             self.model = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')
             self.model.to(self.device)
     
-    def get_embeddings(self, texts: List[str], instruction: Optional[str] = None) -> List[List[float]]:
+    def get_embeddings(self, texts: List[str]) -> List[List[float]]:
         """
         Generate embeddings for a list of texts.
         
@@ -59,12 +59,7 @@ class EmbeddingManager:
             if not texts:
                 return []
             
-            # For queries, we can use instructions to improve performance
-            if instruction:
-                # Format texts with instruction for better retrieval
-                formatted_texts = [f"Instruct: {instruction}\nQuery: {text}" for text in texts]
-            else:
-                formatted_texts = texts
+            formatted_texts = texts
             
             # Check if model is available
             if not self.model:
@@ -102,7 +97,6 @@ class EmbeddingManager:
     
     def get_query_embedding(self, query: str) -> List[float]:
         """Generate embedding for a search query with instruction."""
-        instruction = "Given a web search query, retrieve relevant passages that answer the query"
-        embeddings = self.get_embeddings([query], instruction=instruction)
+        embeddings = self.get_embeddings([query])
         return embeddings[0] if embeddings else []
 

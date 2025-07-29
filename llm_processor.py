@@ -2,8 +2,7 @@ import json
 from datetime import datetime
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer, TextIteratorStreamer
-from google import genai
-from google.genai import types
+import google.generativeai as genai
 import os
 import threading
 import logging
@@ -23,7 +22,7 @@ class LLMProcessor:
         self.model = AutoModelForCausalLM.from_pretrained(
             model_name,
             torch_dtype=torch.bfloat16,
-            attn_implementation="flash_attention_2",
+            # attn_implementation="flash_attention_2", # may t ko chay dc flash attention, chay prod thi cmt lai
             device_map=self.device
         ).eval()
 
@@ -174,7 +173,8 @@ class ApiProcessor:
                     "Please provide it as an argument or set the GEMINI_API_KEY "
                     "environment variable."
                 )
-        self.client = genai.Client(api_key=api_key)
+        genai.configure(api_key=api_key)
+        self.api_key = api_key
 
 
 
@@ -203,15 +203,17 @@ class ApiProcessor:
         # The 'contents' parameter for generate_content expects a list of Content objects.
         # Each Content object represents a turn in the conversation with a role (user/model)
         try:
-            # Add previous conversation turns from history
-            response = self.client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=user_input,
-            config=types.GenerateContentConfig(
-                system_instruction=system_prompt,
-                thinking_config=types.ThinkingConfig(thinking_budget=0),
-            ),
-            )
+            # Create the model instance
+            model = genai.GenerativeModel('gemini-2.5-flash')
+            
+            # Generate content with system instruction
+            if system_prompt:
+                # For newer API, combine system prompt with user input
+                full_prompt = f"System: {system_prompt}\n\nUser: {user_input}"
+            else:
+                full_prompt = user_input
+            
+            response = model.generate_content(full_prompt)
             return response.text
         except Exception as e:
             # Handle any exceptions that occur during the API call

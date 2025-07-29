@@ -9,7 +9,7 @@ import os
 from datetime import datetime
 from typing import List, Dict
 import uuid
-
+from gradio_tabs import SemanticSearchTab, ChatWithDocumentTab, ExtractInformationTab
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -23,10 +23,20 @@ with open('./sys_prompts/chat_prompt.md', 'r') as f:
 
 api_processor = ApiProcessor()
 llm_processor = LLMProcessor()
+
+# Create shared embedding manager
+from rag.embedding_manager import EmbeddingManager
+shared_embedding_manager = EmbeddingManager()
+
 indexer = DocumentIndexer(api_processor, chunking_system_prompt)
+# Override with shared instance to avoid duplicate loading
+indexer.embedding_manager = shared_embedding_manager
+
 comparator = QueryProcessorComparator(
     user_prompt_file="./sys_prompts/compare_doc_prompt.md"
 )
+# Override with shared instance to avoid duplicate loading
+comparator.query_processor.embedding_manager = shared_embedding_manager
 
 def index_uploaded_document(file) -> str:
     """
@@ -219,6 +229,9 @@ def generate(prompt, history):
 
 def create_interface():
     """Create a Gradio interface for document upload, search, comparison, and chat."""
+    search_tab = SemanticSearchTab(comparator.query_processor)
+    chat_tab = ChatWithDocumentTab()
+    extract_tab = ExtractInformationTab()
     with gr.Blocks(title="Document Comparison and Chat Demo") as interface:
         gr.Markdown("""
         # 🔍 Document Comparison and Chat Demo
@@ -230,8 +243,7 @@ def create_interface():
         - 🧠 Semantic search with Qwen embeddings
         - 📊 Compare documents for conflicts and similarities
         - 💬 Chat with the AI for general queries
-        """)
-        
+        """)        
         with gr.Tab("📂 Upload Document"):
             gr.Markdown("### Upload and Index Markdown Document")
             gr.Markdown("*Upload a .md file to index its contents for search and comparison.*")
@@ -381,6 +393,10 @@ def create_interface():
                 # undo_btn=None,   # Disable undo button if not needed
                 # clear_btn="Clear"  # Optional: Add a clear button
             )
+        
+        search_tab.get_frontend()
+        chat_tab.get_frontend()
+        extract_tab.get_frontend()
             
     return interface
 

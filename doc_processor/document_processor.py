@@ -3,62 +3,54 @@ import logging
 import pypdf
 from docx import Document
 import tempfile
+import asyncio
+import base64
 from config import Config
 from doc_processor.nanonetocr import NanoNetsOCRProcessor
+from rag.nanonet_ocr import ocr_list_pages
+from rag.utils import crop_all_pages, encode_image
+from PIL import Image
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
 class DocumentProcessor:
-    """Handles document parsing and text extraction with Nanonets preprocessing."""
+    """Handles document parsing and text extraction with OCR preprocessing."""
     
-    def __init__(self):
-        self.nanonets_processor = NanoNetsOCRProcessor()
+    def __init__(self, name: str = "OCR module"):
+        self.name = name
     
     def extract_text_from_pdf(self, file_path: str) -> str:
-        """Extract text from PDF file using Nanonets OCR."""
+        """Extract text from PDF file using OCR."""
         try:
-            # Use Nanonets OCR for better results
-            if self.nanonets_processor.model:
-                logger.info(f"🔄 Processing PDF with Nanonets OCR: {file_path}")
-                
-                # Convert PDF to images
-                pages_content = self.nanonets_processor.extract_pages_content(file_path)
-                
-                if not pages_content:
-                    # Fallback to traditional PDF extraction
-                    return self._extract_text_from_pdf_traditional(file_path)
-                
-                # Process each page and combine results
-                combined_text = ""
-                for i, page_content in enumerate(pages_content):
-                    page_text = ""
-                    for element in page_content:
-                        if element['type'] == 'text':
-                            page_text += element['content'] + "\n"
-                        elif element['type'] == 'image':    
-                            # save to temp file first
-                            temp_file = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
-                            element['content'].save(temp_file.name)
-                            page_text += self.nanonets_processor.convert_to_markdown(temp_file.name) + "\n"
-                            os.unlink(temp_file.name)
-                            temp_file.close()
-                    logger.info(f"📄 Processing page {i+1}/{len(pages_content)}")
-                    
-                    if page_text:
-                        combined_text += f"\n\n--- Page {i+1} ---\n\n{page_text}"
-                    
-                if combined_text:
-                    logger.info(f"✅ Extracted text from PDF using Nanonets: {len(combined_text)} characters")
-                    ## save to temp file
-                    with open(f"temp_page_{i+1}.md", "w") as file:
-                        file.write(combined_text)
-                    return combined_text.strip()
+            logger.info(f"🔄 Processing PDF with OCR: {file_path}")
             
-            # Fallback to traditional extraction
-            return self._extract_text_from_pdf_traditional(file_path)
+            # Convert PDF to base64 images
+            encoded_images = crop_all_pages(file_path)
+            
+            if not encoded_images:
+                logger.warning("⚠️ No images extracted from PDF, falling back to traditional method")
+                return self._extract_text_from_pdf_traditional(file_path)
+            
+            # Use OCR to extract text from images
+            async def extract_text_with_ocr():
+                ocr_text = await ocr_list_pages(encoded_images)
+                return ocr_text
+            
+            # Get OCR text
+            extracted_text = asyncio.run(extract_text_with_ocr())
+            
+            if extracted_text and extracted_text.strip():
+                logger.info(f"✅ Extracted text from PDF using OCR: {len(extracted_text)} characters")
+                return extracted_text.strip()
+            else:
+                logger.warning("⚠️ OCR extraction failed, falling back to traditional method")
+                return self._extract_text_from_pdf_traditional(file_path)
             
         except Exception as e:
-            logger.error(f"❌ Error extracting text from PDF: {e}")
+            logger.error(f"❌ Error extracting text from PDF with OCR: {e}")
+            logger.info("🔄 Falling back to traditional PDF extraction")
             return self._extract_text_from_pdf_traditional(file_path)
     
     def _extract_text_from_pdf_traditional(self, file_path: str) -> str:
@@ -80,16 +72,11 @@ class DocumentProcessor:
     def extract_text_from_image(self, file_path: str) -> str:
         """Extract text from image file using Nanonets OCR."""
         try:
-            if self.nanonets_processor.model:
-                logger.info(f"🔄 Processing image with Nanonets OCR: {file_path}")
-                markdown_text = self.nanonets_processor.convert_to_markdown(file_path)
-                
-                if markdown_text:
-                    logger.info(f"✅ Extracted text from image: {len(markdown_text)} characters")
-                    return markdown_text
-            
-            logger.warning(f"⚠️ Nanonets OCR not available for image: {file_path}")
-            return ""
+            logger.info(f"🔄 Processing image with OCR: {file_path}")
+            encoded_image = encode_image(file_path)
+            extracted_text = asyncio.run(ocr_list_pages([encoded_image]))
+            logger.info(f"✅ Extracted text from image: {len(extracted_text)} characters")
+            return extracted_text
             
         except Exception as e:
             logger.error(f"❌ Error extracting text from image: {e}")
