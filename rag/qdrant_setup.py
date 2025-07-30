@@ -276,6 +276,82 @@ class QdrantManager:
         except Exception as e:
             logger.error(f"❌ Error listing documents: {e}")
             return []
+    def list_document_names(self) -> List[str]:
+        """List all document names in the collection."""
+        if not self.client:
+            return []
+        
+        try:
+            # Get a sample of points to extract document names
+            search_results = self.client.scroll(
+                collection_name=self.collection_name,
+                limit=10000,  # Adjust based on your needs
+                with_payload=True
+            )
+            
+            # Extract unique document names
+            document_names = set()
+            for point in search_results[0]:
+                doc_name = point.payload['document_name']
+                document_names.add(doc_name)
+            
+            return list(document_names)
+            
+        except Exception as e:
+            logger.error(f"❌ Error listing document names: {e}")
+            return []
+        
+    def get_document_by_name(self, document_name: str) -> List[Dict[str, Any]]:
+        """Retrieve all chunks for a specific document by its name."""
+        if not self.client:
+            logger.error("❌ Qdrant client not connected")
+            return []
+        
+        try:
+            # Scroll through points with a filter for the document name
+            search_results = self.client.scroll(
+                collection_name=self.collection_name,
+                limit=10000,  # Adjust based on your needs
+                with_payload=True,
+                with_vectors=True,  # Include vectors if needed
+                scroll_filter=Filter(
+                    must=[
+                        FieldCondition(
+                            key="document_name",
+                            match=MatchValue(value=document_name)
+                        )
+                    ]
+                )
+            )
+            
+            # Format results
+            results = []
+            for point in search_results[0]:
+                results.append({
+                    'id': point.id,
+                    'vector': point.vector,
+                    'document_id': point.payload['document_id'],
+                    'document_name': point.payload['document_name'],
+                    'document_type': point.payload['document_type'],
+                    'chunk_id': point.payload['chunk_id'],
+                    'chunk_index': point.payload['chunk_index'],
+                    'text': point.payload['text'],
+                    'chunk_length': point.payload['chunk_length'],
+                    'chunk_start_pos': point.payload['chunk_start_pos'],
+                    'chunk_end_pos': point.payload['chunk_end_pos'],
+                    'total_chunks': point.payload['total_chunks'],
+                    'upload_timestamp': point.payload['upload_timestamp']
+                })
+            
+            if results:
+                logger.info(f"✅ Retrieved {len(results)} chunks for document: {document_name}")
+            else:
+                logger.info(f"⚠️ No chunks found for document: {document_name}")
+            return results
+            
+        except Exception as e:
+            logger.error(f"❌ Error retrieving document {document_name}: {e}")
+            return []
     
     def clear_collection(self) -> bool:
         """Clear all data from the collection."""

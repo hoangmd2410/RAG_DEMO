@@ -2,11 +2,14 @@ import json
 from datetime import datetime
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer, TextIteratorStreamer
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 import os
 import threading
 import logging
 from typing import List
+import time
+
 
 class LLMProcessor:
     def __init__(self, model_name="Qwen/Qwen2.5-3B-Instruct"):
@@ -22,7 +25,7 @@ class LLMProcessor:
         self.model = AutoModelForCausalLM.from_pretrained(
             model_name,
             torch_dtype=torch.bfloat16,
-            # attn_implementation="flash_attention_2", # may t ko chay dc flash attention, chay prod thi cmt lai
+            attn_implementation="flash_attention_2",
             device_map=self.device
         ).eval()
 
@@ -68,7 +71,7 @@ class LLMProcessor:
         return response
 
     def answer_question(
-        self, question: str, history: List[List[str]] = None, top_k: int = 3, context: str = ""
+        self, question: str, history: List[List[str]] = None, top_k: int = 3, context: str = "", sys_prompt: str = ""
     ):
         """
         Answer a question with streaming output using TextIteratorStreamer.
@@ -87,7 +90,7 @@ class LLMProcessor:
             messages = [
                 {
                     "role": "system",
-                    "content": "Bạn là một trợ lý tư vấn pháp luật thông minh trả lời câu hỏi dựa trên ngữ cảnh cho tiếng Việt và dành cho người Việt. Hãy trả lời bằng tiếng Việt, dạng đoạn văn, rõ ràng và dễ hiểu."
+                    "content": sys_prompt
                 }
             ]
 
@@ -100,7 +103,8 @@ class LLMProcessor:
                         messages.append({"role": "assistant", "content": assistant_msg})
 
             # Add current question with context
-            messages.append({"role": "user", "content": f"{question}"})
+            # messages.append({"role": "user", "content": f"{question}"})
+            messages.append({"role": "user", "content": f"### Context: {context}\n\n### Question: {question}"})
 
             # Apply chat template
             text = self.tokenizer.apply_chat_template(
@@ -120,7 +124,7 @@ class LLMProcessor:
                 "input_ids": model_inputs["input_ids"],
                 "attention_mask": model_inputs["attention_mask"],
                 "max_new_tokens": 8192,
-                "do_sample": False,
+                "do_sample": True,
                 "top_k": 10,
                 "top_p": 0.95,
                 "temperature": 0.4,
@@ -173,8 +177,7 @@ class ApiProcessor:
                     "Please provide it as an argument or set the GEMINI_API_KEY "
                     "environment variable."
                 )
-        genai.configure(api_key=api_key)
-        self.api_key = api_key
+        self.client = genai.Client(api_key=api_key)
 
 
 
@@ -203,17 +206,16 @@ class ApiProcessor:
         # The 'contents' parameter for generate_content expects a list of Content objects.
         # Each Content object represents a turn in the conversation with a role (user/model)
         try:
-            # Create the model instance
-            model = genai.GenerativeModel('gemini-2.5-flash')
-            
-            # Generate content with system instruction
-            if system_prompt:
-                # For newer API, combine system prompt with user input
-                full_prompt = f"System: {system_prompt}\n\nUser: {user_input}"
-            else:
-                full_prompt = user_input
-            
-            response = model.generate_content(full_prompt)
+            # Add previous conversation turns from history
+            response = self.client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=user_input,
+            config=types.GenerateContentConfig(
+                system_instruction=system_prompt,
+                response_mime_type="application/json",
+                thinking_config=types.ThinkingConfig(thinking_budget=0),
+            ),
+            )
             return response.text
         except Exception as e:
             # Handle any exceptions that occur during the API call

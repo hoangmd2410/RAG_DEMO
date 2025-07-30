@@ -13,23 +13,11 @@ Dựa trên các điều khoản được cung cấp, vui lòng thực hiện c�
 
 Phản hồi theo định dạng JSON có cấu trúc như sau:
 {{
-    "findings": [
-        {{
             "type": "Conflict" | "Similarity",
             "explanation": "Giải thích lý do tại sao các điều khoản này mâu thuẫn hoặc giống nhau",
-            "clause_1": {{
-                "document_id": "string",
-                "document_name": "string",
-                "clause": "string"
-            }},
-            "clause_2": {{
-                "document_id": "string",
-                "document_name": "string",
-                "clause": "string"
-            }}
-        }}
-    ]
+            "clause": "nội dung tóm tắt điều khoản mã số hiệu mà giống nhau hoặc mâu thuẫn"
 }}
 
-Nếu không tìm thấy bất kỳ mâu thuẫn hoặc điểm tương đồng nào, vui lòng trả về danh sách findings rỗng:
-{{"findings": []}}
+
+Nếu không tìm thấy bất kỳ mâu thuẫn hoặc điểm tương đồng nào, vui lòng trả về danh sách rỗng:
+{{}}

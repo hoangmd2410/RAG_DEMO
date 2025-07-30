@@ -74,7 +74,6 @@ Bạn là một trợ lý pháp lý chuyên xử lý và phân tích văn bản 
     }
   ]
 },
-####
   {
     "tên_tài_liệu": "QUYẾT ĐỊNH Quy định sử dụng Quỹ phát triển hoạt động sự nghiệp của đơn vị sự nghiệp công lập thuộc thành phố Hà Nội",
     "số_hiệu": "02/2025/QĐ-UBND",
@@ -93,7 +92,7 @@ Bạn là một trợ lý pháp lý chuyên xử lý và phân tích văn bản 
 ]
 
 ### Lưu ý:
-- Đảm bảo output là một chuỗi hợp lệ, các json object phân tách nhau bởi ####
+- Đảm bảo output là một chuỗi hợp lệ
 - Xử lý cẩn thận các trường hợp văn bản không có cấu trúc rõ ràng (thiếu Điều, Khoản, Điểm, hoặc metadata).
 - Giữ nguyên định dạng ngày ISO (YYYY-MM-DD) và đảm bảo tính nhất quán trong toàn bộ output.
 - Nếu không tìm thấy thông tin metadata, sử dụng các giá trị mặc định như đã hướng dẫn.

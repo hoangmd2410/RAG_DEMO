@@ -146,3 +146,12 @@ class DocumentProcessor:
             logger.error(f"❌ Unsupported file format: {file_ext}")
             return ""
 
+# import time
+
+# start = time.time()
+# doc_processor = DocumentProcessor()
+# file_path = '/home/ubuntu/tts-dev-drive/tuna/RAG_DEMO/data/VanBanGoc_70.2024.pdf'
+# text = doc_processor.extract_text(file_path)
+# end = time.time()
+
+# print(end-start)

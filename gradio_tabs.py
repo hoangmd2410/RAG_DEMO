@@ -301,121 +301,129 @@ class ExtractInformationTab:
         if not Config.OPENAI_API_KEY:
             return "❌ OpenAI API key not configured. Information extraction requires OpenAI."
         
-        try:
-            # Get file path
-            file_path = file.name if hasattr(file, 'name') else str(file)
-            file_extension = os.path.splitext(file_path)[1].lower()
-            
-            if file_extension != '.pdf':
-                return "❌ Please upload a PDF file only"
-                
-            # Convert PDF to images (base64 encoded)
-            encoded_images = crop_all_pages(file_path)
-            
-            # Use OCR to extract text from images
-            async def extract_text_with_ocr():
-                ocr_text = await ocr_list_pages(encoded_images)
-                return ocr_text
-            
-            # Get OCR text
-            document_text = asyncio.run(extract_text_with_ocr())
-            
-            if not document_text:
-                return "❌ Failed to extract text from document"
-            
-            # Use OpenAI to extract structured information from the text
-            async def extract_information_from_text():
-                client = AsyncOpenAI(api_key=Config.OPENAI_API_KEY)
-                response = await client.chat.completions.create(
-                    model="gpt-4o",  # Use gpt-4o for vision capabilities
-                    response_format={"type": "json_object"},
-                    messages=[
-                        {
-                            "role": "system", 
-                            "content": """Dựa vào nội dung của file pdf được upload, trích xuất các thông tin quan trọng và trả về dưới dạng json:
-                            - Thể loại (type): Thể loại của văn bản được upload. Nó có thể là Quyết định, Nghị định, Nghị quyết, Thông tư. Thông tin này được quyết định dựa vào phần đầu nội dung của văn bản sau khi kết thúc phần quốc hiệu tiêu ngữ. Thường được in đậm cùng với tên văn bản
-                            - Tên văn bản (Document Name): Tên văn bản được upload, nằm ở phần đầu văn bản ngay sau phần Thể loại. Thường được in đậm cùng với "Thể loại". Phải lấy hết toàn bộ nôi dung nguyên văn của tên văn bản, không được tóm tắt
-                            - Cơ quan ban hành (Source): Cơ quan hoặc tổ chức ban hành văn bản, nằm ở phần đầu văn bản
-                            - Văn bản căn cứ (Related Documents): Danh sách các văn bản cản cứ mà văn bản hiện tại dựa vào để ban hành. Chúng được nằm ở phần đầu nội dung văn bản sau khi kết thúc phần tên văn bản và trước khi bắt đầu nội dung các quy định văn bản . Ví dụ 'Căn cứ Luật giao thông 2025' hoặc 'Căn cứ Thông tư 64 năm 2024" hoặc "Thực hiện nghị định 105/2022/NĐ-CP"
-                            - Văn bản đề nghị (Proposed Documents): là 1 văn bản duy nhất đề nghị của văn bản hiện tại. Nó được bắt đầu bằng motip "Theo đề nghị" hoặc "Theo đề xuất". Văn bản đề nghị có thể không có nếu văn bản hiện tại được soạn thảo theo biểu quyết của cử tri
-                            - Văn bản sửa đổi/ bổ sung (Amendment Documents): Danh sách các văn bản mà văn bản hiện tại sửa đổi/ bổ sung hoặc bác bỏ. Các văn bản này có thể tìm thấy ở phần Tên văn bản. Có thể rỗng
-                            - Văn bản bãi bỏ (Removed Documents): Danh sách các văn bản mà văn bản hiện tại bãi bỏ. Các văn bản này có thể tìm thấy ở phần Tên văn bản. Có thể rỗng
-                            - Ngày tháng năm phát hành (Date of Issue): Ngày tháng năm phát hành của văn bản, nằm ở phần đầu văn bản.
-                            - Người kí (Signature Name): Nằm ở phần cuối của văn bản phần chữ kí
-                            - Chức vụ người kí (Position): Nằm ở phần cuối văn bản cùng với phần chữ kí
-                            Kết quả trả về dưới dạng json theo format như sau:
-                            {
-                            'result': {
-                                "type": "Thể loại của văn bản",
-                                "Document Name": "Tên văn bản được upload",
-                                "Number": "Số kí hiệu của văn bản. Phải đầy đủ số, không được bỏ số 0 ở đầu. Ví dụ: 33/2025/TT-BGDĐT",
-                                "Source": "Cơ quan hoặc tổ chức ban hành văn bản",
-                                "Related Documents": "List các văn bản cản cứ mà văn bản hiện tại dựa vào để ban hành",
-                                "Proposed Documents": "Văn bản đề nghị của văn bản hiện tại. None nếu không có",
-                                "Amendment Documents": "List các văn bản mà văn bản hiện tại sửa đổi/ bổ sung. List rỗng [] nếu không có",
-                                "Removed Documents": "List các văn bản mà văn bản hiện tại bãi bỏ. List rỗng [] nếu không có",
-                                "Date of Issue": "Ngày tháng năm phát hành của văn bản. Trả về dưới dạng dd/mm/yyyy. Nếu ngày tháng năm phần nào không có thì trả về --. Ví dụ 22/06/2025 hoặc --/06/2025 nếu không có phần ngày",
-                                "Date of Effective": "Ngày hiệu lực của văn bản. Trả về dưới dạng dd/mm/yyyy. Nếu ngày hiệu lực phần nào không có thì trả về --. Ví dụ 22/06/2025 hoặc --/06/2025 nếu không có phần ngày",
-                                "Signature Name": "Người kí của văn bản",
-                                "Position": "Chức vụ người kí của văn bản. None nếu không có"
-                                }
-                            }
-                            Ví dụ:
-                            {
-                                "result": {
-                                    "type": "Thông tư",
-                                    "Document Name": "Hướng dẫn thực hiện bảo đảm cấp nước an toàn khu vực nông thôn",
-                                    "Number": "33/2025/TT-TTCP",
-                                    "Source": "Văn phòng chính phủ",
-                                    "Related Documents": ["Nghị định số 105/2022/NĐ-CP", "Nghị định số 117/2007/NĐ-CP", " Nghị định số 124/2011/NĐ-CP"],
-                                    "Proposed Documents": "281/STC-TCĐT",
-                                    "Amendment Documents": [],
-                                    "Removed Documents": [],
-                                    "Date of Issue": "22/07/2025",
-                                    "Date of Effective": "25/07/2025",
-                                    "Signature Name": "Phạm Minh Chính",
-                                    "Position": "Thủ tướng"
-                                }
-                            }
-                            """
-                        },
-                        {
-                            "role": "user",
-                            "content": document_text
-                        }
-                    ]
-                )
-                json_output = json.loads(response.choices[0].message.content)['result']
+        # try:
+        # Get file path
+        file_path = file.name if hasattr(file, 'name') else str(file)
+        file_extension = os.path.splitext(file_path)[1].lower()
+        
+        if file_extension != '.pdf':
+            return "❌ Please upload a PDF file only"
 
-                return json_output
+
+        # Convert PDF to images (base64 encoded)
+        encoded_images = crop_all_pages(file_path)
+        
+        # Use OCR to extract text from images
+        async def extract_text_with_ocr():
+            ocr_text = await ocr_list_pages(encoded_images)
+            return ocr_text
+        
+        # Get OCR text
+        document_text = asyncio.run(extract_text_with_ocr())
+        
+        if not document_text:
+            return "❌ Failed to extract text from document"
+        
+        # Use OpenAI to extract structured information from the text
+        async def extract_information_from_text():
+            client = AsyncOpenAI(api_key=Config.OPENAI_API_KEY)
+            response = await client.chat.completions.create(
+                model="gpt-4o",  # Use gpt-4o for vision capabilities
+                response_format={"type": "json_object"},
+                messages=[
+                    {
+                        "role": "system", 
+                        "content": """Dựa vào nội dung của file pdf được upload, trích xuất các thông tin quan trọng và trả về dưới dạng json:
+                        - Thể loại (type): Thể loại của văn bản được upload. Nó có thể là Quyết định, Nghị định, Nghị quyết, Thông tư. Thông tin này được quyết định dựa vào phần đầu nội dung của văn bản sau khi kết thúc phần quốc hiệu tiêu ngữ. Thường được in đậm cùng với tên văn bản
+                        - Tên văn bản (Document Name): Tên văn bản được upload, nằm ở phần đầu văn bản ngay sau phần Thể loại. Thường được in đậm cùng với "Thể loại". Phải lấy hết toàn bộ nôi dung nguyên văn của tên văn bản, không được tóm tắt
+                        - Cơ quan ban hành (Source): Cơ quan hoặc tổ chức ban hành văn bản, nằm ở phần đầu văn bản
+                        - Văn bản căn cứ (Related Documents): Danh sách các văn bản cản cứ mà văn bản hiện tại dựa vào để ban hành. Chúng được nằm ở phần đầu nội dung văn bản sau khi kết thúc phần tên văn bản và trước khi bắt đầu nội dung các quy định văn bản . Ví dụ 'Căn cứ Luật giao thông 2025' hoặc 'Căn cứ Thông tư 64 năm 2024" hoặc "Thực hiện nghị định 105/2022/NĐ-CP"
+                        - Văn bản đề nghị (Proposed Documents): là 1 văn bản duy nhất đề nghị của văn bản hiện tại. Nó được bắt đầu bằng motip "Theo đề nghị" hoặc "Theo đề xuất". Văn bản đề nghị có thể không có nếu văn bản hiện tại được soạn thảo theo biểu quyết của cử tri
+                        - Văn bản sửa đổi/ bổ sung (Amendment Documents): Danh sách các văn bản mà văn bản hiện tại sửa đổi/ bổ sung hoặc bác bỏ. Các văn bản này có thể tìm thấy ở phần Tên văn bản. Có thể rỗng
+                        - Văn bản bãi bỏ (Removed Documents): Danh sách các văn bản mà văn bản hiện tại bãi bỏ. Các văn bản này có thể tìm thấy ở phần Tên văn bản. Có thể rỗng
+                        - Ngày tháng năm phát hành (Date of Issue): Ngày tháng năm phát hành của văn bản, nằm ở phần đầu văn bản.
+                        - Người kí (Signature Name): Nằm ở phần cuối của văn bản phần chữ kí
+                        - Chức vụ người kí (Position): Nằm ở phần cuối văn bản cùng với phần chữ kí
+                        Kết quả trả về dưới dạng json theo format như sau:
+                        {
+                        'result': {
+                            "type": "Thể loại của văn bản",
+                            "Document Name": "Tên văn bản được upload",
+                            "Number": "Số kí hiệu của văn bản. Phải đầy đủ số, không được bỏ số 0 ở đầu. Ví dụ: 33/2025/TT-BGDĐT",
+                            "Source": "Cơ quan hoặc tổ chức ban hành văn bản",
+                            "Related Documents": "List các văn bản cản cứ mà văn bản hiện tại dựa vào để ban hành",
+                            "Proposed Documents": "Văn bản đề nghị của văn bản hiện tại. None nếu không có",
+                            "Amendment Documents": "List các văn bản mà văn bản hiện tại sửa đổi/ bổ sung. List rỗng [] nếu không có",
+                            "Removed Documents": "List các văn bản mà văn bản hiện tại bãi bỏ. List rỗng [] nếu không có",
+                            "Date of Issue": "Ngày tháng năm phát hành của văn bản. Trả về dưới dạng dd/mm/yyyy. Nếu ngày tháng năm phần nào không có thì trả về --. Ví dụ 22/06/2025 hoặc --/06/2025 nếu không có phần ngày",
+                            "Date of Effective": "Ngày hiệu lực của văn bản. Trả về dưới dạng dd/mm/yyyy. Nếu ngày hiệu lực phần nào không có thì trả về --. Ví dụ 22/06/2025 hoặc --/06/2025 nếu không có phần ngày",
+                            "Signature Name": "Người kí của văn bản",
+                            "Position": "Chức vụ người kí của văn bản. None nếu không có"
+                            }
+                        }
+                        Ví dụ:
+                        {
+                            "result": {
+                                "type": "Thông tư",
+                                "Document Name": "Hướng dẫn thực hiện bảo đảm cấp nước an toàn khu vực nông thôn",
+                                "Number": "33/2025/TT-TTCP",
+                                "Source": "Văn phòng chính phủ",
+                                "Related Documents": ["Nghị định số 105/2022/NĐ-CP", "Nghị định số 117/2007/NĐ-CP", " Nghị định số 124/2011/NĐ-CP"],
+                                "Proposed Documents": "281/STC-TCĐT",
+                                "Amendment Documents": [],
+                                "Removed Documents": [],
+                                "Date of Issue": "22/07/2025",
+                                "Date of Effective": "25/07/2025",
+                                "Signature Name": "Phạm Minh Chính",
+                                "Position": "Thủ tướng"
+                            }
+                        }
+                        """
+                    },
+                    {
+                        "role": "user",
+                        "content": document_text
+                    }
+                ]
+            )
+            json_output = json.loads(response.choices[0].message.content)['result']
+
+            return json_output
+        
+        extracted_data = asyncio.run(extract_information_from_text())
+        
+        return (
+            f"✅ **Hoàn thành trích xuất**\n\n"
+            f"📄 **Độ dài văn bản:** {len(encoded_images)} trang\n"
+            f"📝 **Độ dài văn bản sau khi OCR:** {len(document_text):,} ký tự\n\n"
+            f"**Dữ liệu trích xuất:**\n"
+            f"- Loại văn bản: {extracted_data['type']}\n"
+            f"- Tên văn bản: {extracted_data['Document Name']}\n"
+            f"- Số kí hiệu: {extracted_data['Number']}\n"
+            f"- Cơ quan ban hành: {extracted_data['Source']}\n"
+            f"- Văn bản căn cứ:\n"
+            f"- Văn bản đề nghị: {extracted_data['Proposed Documents']}\n"
+            f"- Văn bản sửa đổi/ bổ sung:\n"
+            + (
+                "".join(f"\t* {i}\n" for i in extracted_data['Amendment Documents'])
+                if extracted_data['Amendment Documents'] else ""
+            )
+            + f"- Văn bản bãi bỏ:\n"
+            + (
+                "".join(f"\t* {i}\n" for i in extracted_data['Removed Documents'])
+                if extracted_data['Removed Documents'] else ""
+            )
+            + f"- Ngày tháng năm phát hành: {extracted_data['Date of Issue']}\n"
+            + f"- Ngày hiệu lực: {extracted_data['Date of Effective']}\n"
+            + f"- Người kí: {extracted_data['Signature Name']}\n"
+            + f"- Chức vụ người kí: {extracted_data['Position']}\n"
+        )
+
             
-            extracted_data = asyncio.run(extract_information_from_text())
-            
-            return (f"✅ **Hoàn thành trích xuất**\n\n"
-                    f"📄 **Độ dài văn bản:** {len(encoded_images)} trang\n"
-                    f"📝 **Độ dài văn bản sau khi OCR:** {len(document_text):,} ký tự\n\n"
-                    f"**Dữ liệu trích xuất:**\n"
-                    f"- Loại văn bản: {extracted_data['type']}\n"
-                    f"- Tên văn bản: {extracted_data['Document Name']}\n"
-                    f"- Số kí hiệu: {extracted_data['Number']}\n"
-                    f"- Cơ quan ban hành: {extracted_data['Source']}\n"
-                    f"- Văn bản căn cứ:\n"
-                    f"{'\t*'+'\t*'.join([i+"\n" for i in extracted_data['Related Documents']])}"
-                    f"- Văn bản đề nghị: {extracted_data['Proposed Documents']}\n"                    
-                    f"- Văn bản sửa đổi/ bổ sung:\n"
-                    f"{'\t*'+'\t*'.join([i+"\n" for i in extracted_data['Amendment Documents']]) if extracted_data['Amendment Documents'] else ''}"
-                    f"- Văn bản bãi bỏ:\n"
-                    f"{'\t*'+'\t*'.join([i+"\n" for i in extracted_data['Removed Documents']]) if extracted_data['Removed Documents'] else ''}"
-                    f"- Ngày tháng năm phát hành: {extracted_data['Date of Issue']}\n"
-                    f"- Ngày hiệu lực: {extracted_data['Date of Effective']}\n"
-                    f"- Người kí: {extracted_data['Signature Name']}\n"
-                    f"- Chức vụ người kí: {extracted_data['Position']}\n"
-                    )
-            
-        except ImportError as e:
-            return f"❌ {str(e)}"
-        except Exception as e:
-            return f"❌ Error processing PDF file: {str(e)}"
+        # except ImportError as e:
+        #     return f"❌ {str(e)}"
+        # except Exception as e:
+        #     return f"❌ Error processing PDF file: {str(e)}"
     
     def get_frontend(self):
         """Returns the information extraction tab interface"""

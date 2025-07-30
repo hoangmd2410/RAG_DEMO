@@ -8,6 +8,7 @@ from rag.embedding_manager import EmbeddingManager
 from rag.qdrant_setup import QdrantManager
 from config import Config
 import re
+import json
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -35,7 +36,7 @@ class DocumentIndexer:
         """
         logger.info("✂️ Chunking text into smaller segments")
         response = self.llm_processor.process(text, self.chunking_sys_prompt)
-        chunk_texts = response.split("####")
+        chunk_texts = json.loads(response)
         
         if not chunk_texts:
             logger.error("Failed to create text chunks")

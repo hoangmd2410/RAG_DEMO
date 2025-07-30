@@ -33,7 +33,40 @@ class QueryProcessorComparator:
         except Exception as e:
             logger.error(f"Failed to read user prompt file {user_prompt_file}: {str(e)}")
             raise IOError(f"Failed to read user prompt file: {str(e)}")
-    
+    def compare_pair_chunk(self,chunk_a, chunk_b):
+
+        query = chunk_a['text']
+        
+        
+
+        doc_name = chunk_b['document_name']
+
+        doc_id = chunk_b['document_id']
+
+        if doc_name not in query:
+            # try:
+                context = chunk_b['text']
+
+                prompt = self.user_prompt_template.format(query=query, context_text=context)
+
+
+                response = self.llm_processor.process(
+                    user_input=prompt,
+                    system_prompt=self.system_prompt
+                )
+                res = json.loads(response)
+
+                if isinstance(res,list):
+                    res = res[0]
+                if res != {}:
+                    res['document_name'] = doc_name
+                    res['document_id'] = doc_id         
+                    return res
+            # except:
+            #     return None
+        return None
+
+
     def compare_query_results(
         self,
         query: str,
@@ -62,7 +95,6 @@ class QueryProcessorComparator:
             'error': None
         }
         
-        start_time = datetime.now()
         
 
         if not query.strip():
@@ -86,41 +118,41 @@ class QueryProcessorComparator:
             return result
             
         # Step 2: Prepare context from search results
-        context = []
+
+        compare_output =   []
+        
         for result in search_results['results']:
-            context.append({
-                'document_id': result['document_id'],
-                'document_name': result['document_name'],
-                'clause': f"Chunk {result['chunk_info']['chunk_index']}",
-                'text': result['text'],
-                'score': round(result['score'], 4)
-            })
+
+            doc_name = result['document_name']
+
+            doc_id = result['document_id']
+
+            if doc_name not in query:
+                context = result['text']
         
-        if len(context) < 2:
-            result['error'] = "Need at least 2 documents for comparison"
-            return result
+                
             
-        # Step 3: Construct LLM prompt for comparison
-        context_text = "\n".join([
-            f"[{c['document_name']} - {c['clause']}]- search score  {c['score']}: {c['text']}"
-            for c in context
-        ])
-        
-        # Format the user prompt using the template
-        try:
-            prompt = self.user_prompt_template.format(query=query, context_text=context_text)
-        except:
-            result['error'] = f"Invalid prompt template"
-            return result
-        
-        # Step 4: Query LLMProcessor for analysis
-        try:
-            response = self.llm_processor.process(
-                user_input=prompt,
-                system_prompt=self.system_prompt
-            )
-            
-            # Parse the response to ensure it's valid JSON
-            return response
-        except:
-            result['error'] = f"LLM error"
+
+                # Format the user prompt using the template
+                # try:
+                prompt = self.user_prompt_template.format(query=query, context_text=context)
+
+
+                response = self.llm_processor.process(
+                    user_input=prompt,
+                    system_prompt=self.system_prompt
+                )
+                
+                res = json.loads(response)
+
+                if isinstance(res,list):
+                    res = res[0]
+                if res != {}:
+                    res['document_name'] = doc_name
+                    res['document_id'] = doc_id         
+                    compare_output.append(res)       
+
+                # except:
+                #     result['error'] = f"LLM error"
+        return compare_output
+

@@ -2,7 +2,7 @@ from openai import AsyncOpenAI
 import base64
 from rag.utils import encode_image, crop_all_pages
 import asyncio
-client = AsyncOpenAI(api_key="123", base_url="https://ydbna6rhr1f7pc-8000.proxy.runpod.net/v1")
+client = AsyncOpenAI(api_key="123", base_url="https://jh9y53pgv0bp16-8000.proxy.runpod.net/v1")
 
 model = "nanonets/Nanonets-OCR-s"
 
