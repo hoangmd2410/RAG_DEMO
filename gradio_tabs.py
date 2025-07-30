@@ -401,7 +401,7 @@ class ExtractInformationTab:
             f"- Tên văn bản: {extracted_data['Document Name']}\n"
             f"- Số kí hiệu: {extracted_data['Number']}\n"
             f"- Cơ quan ban hành: {extracted_data['Source']}\n"
-            f"- Văn bản căn cứ:\n"
+            f"- Văn bản căn cứ: {extracted_data['Related Documents']} \n"
             f"- Văn bản đề nghị: {extracted_data['Proposed Documents']}\n"
             f"- Văn bản sửa đổi/ bổ sung:\n"
             + (

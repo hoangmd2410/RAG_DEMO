@@ -363,7 +363,7 @@ def create_interface():
         gr.Markdown("""
         # 🔍 Document Comparison and Chat Demo
         
-        Upload Markdown documents, search for relevant content, compare them for conflicts and similarities, or chat with the AI using **Qwen-2.5-3B-Instruct**.
+        Upload Markdown documents, search for relevant content, compare them for conflicts and similarities, or chat with the AI.
 
         """)
         
@@ -517,7 +517,7 @@ def main():
         interface = create_interface()
         interface.launch(
             server_name="0.0.0.0",
-            server_port=6007,
+            server_port=7860,
             show_error=True,
             share=True
         )
